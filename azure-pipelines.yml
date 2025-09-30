@@ -99,4 +99,215 @@ stages:
                           Write-Error "Backup failed: $($_.Exception.Message)"
                           exit 1
                       }
+  - stage: FetchSaludArtifacts
+    displayName: "Download Stage"
+    dependsOn: BackupDatabase
+    condition: succeeded()  # Ensure this stage runs only if the previous stage succeeded
+    jobs:
+      - job: DownloadArtifacts
+        pool:
+          name: Dublin
+          demands: 'agent.name -equals $(agentName)'
+        workspace:
+          clean: all
+    
+        steps:
+
+          # Display the details of the pipeline resource
+          - script: |
+              echo "Pipeline ID: $(resources.pipeline.SaludServices104_116Pipeline.pipelineID)"
+              echo "Run Name: $(resources.pipeline.SaludServices104_116Pipeline.runName)"
+              echo "Run ID: $(resources.pipeline.SaludServices104_116Pipeline.runID)"
+              echo "Run URI: $(resources.pipeline.SaludServices104_116Pipeline.runURI)"
+              echo "Source Branch: $(resources.pipeline.SaludServices104_116Pipeline.sourceBranch)"
+              echo "Source Commit: $(resources.pipeline.SaludServices104_116Pipeline.sourceCommit)"
+              echo "Source Provider: $(resources.pipeline.SaludServices104_116Pipeline.sourceProvider)"
+              echo "Requested For: $(resources.pipeline.SaludServices104_116Pipeline.requestedFor)"
+            displayName: "Display Pipeline Resource Details"
+
+          # Download artifacts from the SaludServices104.116Pipeline
+          - download: SaludServices104_116
+            artifact: drop
+            patterns: |
+              drop/CustomerPackages.zip
+              drop/Setup_Salud.msi
+            displayName: "Downloading Artifacts"
+
+          # Copy the downloaded artifacts to the build directory
+          - task: PowerShell@2
+            displayName: "Copying Artifacts to Build Directory"
+            inputs:
+              filePath: "$(Build.SourcesDirectory)/Copy-Artifacts.ps1"
+              arguments: >
+                -sourcePath "$(Pipeline.Workspace)\SaludServices104_116\drop\" 
+                -destinationPath "C:\Build\" 
+                -itemsToMove "Setup_Salud.msi,CustomerPackages.zip"
+              failOnStderr: true
+              
+            # Extract the CustomerPackages.zip file
+          - powershell: |
+              $zipPath = "C:\Build\CustomerPackages.zip"
+              $extractPath = "C:\Build\CustomerPackages"
+              Write-Host "ZIP Path: $zipPath"
+              Write-Host "Extract Path: $extractPath"
+              Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+            displayName: "Extracting CustomerPackages.zip"
+  - stage: InstallApplication
+    displayName: "Install Application Stage"
+    dependsOn:
+      - FetchSaludArtifacts
+    condition: succeeded()  # Ensure this stage runs only if the previous stage succeeded
+    jobs:
+      - job: InstallAppJob
+        pool:
+          name: Dublin
+          demands: 'agent.name -equals $(agentName)'
+
+        steps:
+          - checkout: self
+          
+          # Stop the IIS service
+          - task: PowerShell@2
+            displayName: "Stop IIS Services"
+            inputs:
+              filePath: "$(Build.SourcesDirectory)/Stop-IIS.ps1"
+              failOnStderr: true
+          
+          # Install the Origin application
+          - task: PowerShell@2
+            displayName: "Install Origin Application"
+            inputs:
+              filePath: "$(Build.SourcesDirectory)/Install-Salud.ps1"
+              arguments: >
+                -buildDirectory "C:\Build\" 
+                -installerFile "Setup_Salud.msi" 
+                -logFile "msiexec.log" 
+                -installDir "C:\Program Files\Titanium Solutions" 
+                -features "SelfCheckInFeature,WebServicesFeature,ImagingServicesFeature,ConfigureIISFeature,APIServicesFeature,RenderServicesFeature" 
+                -webSite "Default Web Site" 
+                -webDescription "Default Web Site" 
+                -webSPort 80 
+                -webSiteIp "*" 
+                -dsnMssqlDatabase "$(databaseName)" 
+                -dsnMssqlPassword "$(databasePassword)" 
+                -dsnMssqlServer "$(ServerInstance)" 
+                -dsnMssqlUsername "$(databaseUserName)" 
+                -webServicesPathName "TITANIUMWSERVER" 
+                -webApplicationsPathName "TITANIUMCLIENT" 
+                -allowMultipleVersions "No" 
+                -webAppName "Salud" 
+                -webAppPool "TitaniumSolutionsDentalAppPool"
+                -webAppPoolCreate "true" 
+                -documentsPath "%ALLUSERSPROFILE%\Titanium Solutions\Documents" 
+                -reportingServicesURL "http://sql-report-svcs/PowerBiServer" 
+                -reportingServicesContextFolder "Cardiff/Application" 
+                -reportingServicesMenuFolder "Cardiff/Console" 
+                -reportingServicesUserName "SSRS" 
+                -reportingServicesPassword "$sRsUs015don"
+              failOnStderr: true
+
+               # Update web config
+          - powershell: |
+              # Path to your web.config file
+              $webConfigPath = "C:\Program Files\Titanium Solutions\Dental Web Services\web.config"
+
+              # Load the config as XML
+              [xml]$config = Get-Content $webConfigPath
+
+              # Define the updates you want (key = value)
+              $updates = @{
+                  "WebServicesHost" = "ws120-QA-LMU.T.TITANIUM.SOLUTIONS"
+                  "ImagingHostBaseAddress" = "https://ws120-QA-LMU.T.TITANIUM.SOLUTIONS/TitaniumImaging/api/"   
+                  "ClientApplicationIdentity" = "QA_LMU"
+                  "ClientPort" = "1000"  
+                  "ServerApplicationIdentity" = "MI_SERVER"  
+                  "ServerAddress" = "TI-PACS-QA.t.titanium.solutions"  
+                  "ServerPort" = "104"  
+                  "RenderExternalAddress" = "https://ws120-QA-LMU.t.titanium.solutions/TitaniumRender"  
+              }
+
+              # Update the values
+              foreach ($key in $updates.Keys) {
+                  $node = $config.configuration.appSettings.add | Where-Object { $_.key -eq $key }
+                  if ($node) {
+                      $node.value = $updates[$key]
+                      Write-Host "Updated $key to $($updates[$key])"
+                  } else {
+                      # Add if not exists
+                      $newNode = $config.CreateElement("add")
+                      $newNode.SetAttribute("key", $key)
+                      $newNode.SetAttribute("value", $updates[$key])
+                      $config.configuration.appSettings.AppendChild($newNode) | Out-Null
+                      Write-Host "Added $key with value $($updates[$key])"
+                  }
+              }
+
+              # Save changes back
+              $config.Save($webConfigPath)
+
+              Write-Host "web.config updated successfully!"
+            displayName: "Update Config Key"
+              
+          # Configure IIS Application
+          - powershell: |
+              $AppPoolName = "$(webAppPool)"
+              $RecycleTime = "02:00"
+    
+              # Import IISAdministration module
+              Import-Module IISAdministration
+    
+              # Start IIS Server Manager session
+              $session = Get-IISServerManager
+    
+              # Check if the Application Pool exists
+              $appPool = $session.ApplicationPools[$AppPoolName]
+              if (-not $appPool) {
+                Write-Host "Application Pool '$AppPoolName' not found!"
+                exit 1
+              }
+    
+              Write-Host "Configuring IIS Application Pool: $AppPoolName"
+    
+              # Set Start Mode to AlwaysRunning
+              $appPool.managedPipelineMode = 0  # 0 = Integrated, 1 = Classic
+              $appPool.AutoStart = $true
+              # Set StartMode to AlwaysRunning
+              $appPool.StartMode = [Microsoft.Web.Administration.StartMode]::AlwaysRunning
+              # Commit the changes
+              Write-Host "Set Start Mode to AlwaysRunning"
+    
+              # Set Recycling -> Disable Overlapping Recycle to True
+              $appPool.Recycling.DisallowOverlappingRotation = $true
+              Write-Host "Set Recycling: Disable Overlapping Recycle to True"
+    
+              # Remove Fixed Intervals if it was set before
+              #$appPool.Recycling.PeriodicRestart = [TimeSpan]::Zero
+              #Write-Host "Removed Fixed Interval if it was previously set"
+              $appPool.Recycling.PeriodicRestart.Schedule.Clear()
+              $appPool.Recycling.PeriodicRestart.Time = [TimeSpan]::Zero
+              $appPool.Recycling.PeriodicRestart.Requests = 0
+              $appPool.Recycling.PeriodicRestart.Memory = 0
+              $appPool.Recycling.PeriodicRestart.PrivateMemory = 0
+    
+              # Set Recycling Specific Time at 02:00 AM
+              $schedule = $appPool.Recycling.PeriodicRestart.Schedule
+              foreach ($item in $schedule) {
+                # Remove specific schedules, here we're assuming you want to clear all schedules
+                $item.Delete()  # Delete each scheduled item
+              }
+              $schedule.Clear()  # Remove existing schedules
+              $schedule.Add($RecycleTime)
+    
+              Write-Host "Set Recycling Specific Time to $RecycleTime AM"
+    
+              # Commit Changes
+              $session.CommitChanges()
+    
+              Write-Host "All settings applied successfully!"
+      
+            displayName: 'OptimiseIIS'
+            continueOnError: true
+
+
+              
           
