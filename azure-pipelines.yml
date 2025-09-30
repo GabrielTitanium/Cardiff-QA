@@ -36,6 +36,21 @@ stages:
           demands: 'agent.name -equals $(agentName)'
         steps:
         - task: PowerShell@2
+          displayName: 'Install SqlServer PowerShell module'
+          inputs:
+            targetType: inline
+            script: |
+              # Ensure TLS 1.2 is used
+              [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+      
+              # Install NuGet provider if not present
+              if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+                  Install-PackageProvider -Name NuGet -Force -Scope CurrentUser
+              }
+      
+              # Install SqlServer module non-interactively
+              Install-Module -Name SqlServer -Force -AllowClobber -Scope CurrentUser
+        - task: PowerShell@2
           name: BackupDatabaseTask
           displayName: 'Backup Database'
           inputs:
