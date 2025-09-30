@@ -6,13 +6,13 @@ variables:
   - name: agentName
     value: 'Cardiff-QA'
   - name: ServerInstance
-    value: '$(ServerInstance)'
+    value: '$(Server)'
   - name: databaseName
-    value: '$(databaseName)'
+    value: '$(dbName)'
   - name: databaseUserName
-    value: '$(databaseUserName)'
+    value: '$(dbUserName)'
   - name: databasePassword
-    value: '$(databasePassword)'
+    value: '$(dbPassword)'
   - name: BackupDirectory
     value: ''
 
