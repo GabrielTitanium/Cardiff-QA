@@ -6,7 +6,15 @@ variables:
   - name: agentName
     value: 'Cardiff-QA'
   - name: ServerInstance
-    value: 'tcp:salud-sql.database.windows.net,1433'
+    value: '$(ServerInstance)'
+  - name: databaseName
+    value: '$(databaseName)'
+  - name: databaseUserName
+    value: '$(databaseUserName)'
+  - name: databasePassword
+    value: '$(databasePassword)'
+  - name: BackupDirectory
+    value: ''
 
 resources:
   pipelines:
