@@ -21,6 +21,7 @@ resources:
     - pipeline: SaludServices104_116  # Alias for the referenced pipeline
       project: Titanium                     # The project where the pipeline exists
       source: "Salud Services 104.116"        # The actual pipeline name (quoted because it contains spaces)
+      version: "46272"
       #trigger:
         #tags:
         #- ReleaseReady                      # Only trigger if the run includes the 'ReleaseReady' tag
@@ -173,9 +174,9 @@ stages:
               filePath: "$(Build.SourcesDirectory)/Stop-IIS.ps1"
               failOnStderr: true
           
-          # Install the Origin application
+          # Install the Salud application
           - task: PowerShell@2
-            displayName: "Install Origin Application"
+            displayName: "Install Salud Application"
             inputs:
               filePath: "$(Build.SourcesDirectory)/Install-Salud.ps1"
               arguments: >
@@ -205,48 +206,6 @@ stages:
                 -reportingServicesUserName "SSRS" 
                 -reportingServicesPassword "$sRsUs015don"
               failOnStderr: true
-
-               # Update web config
-          - powershell: |
-              # Path to your web.config file
-              $webConfigPath = "C:\Program Files\Titanium Solutions\Dental Web Services\web.config"
-
-              # Load the config as XML
-              [xml]$config = Get-Content $webConfigPath
-
-              # Define the updates you want (key = value)
-              $updates = @{
-                  "WebServicesHost" = "ws120-QA-LMU.T.TITANIUM.SOLUTIONS"
-                  "ImagingHostBaseAddress" = "https://ws120-QA-LMU.T.TITANIUM.SOLUTIONS/TitaniumImaging/api/"   
-                  "ClientApplicationIdentity" = "QA_LMU"
-                  "ClientPort" = "1000"  
-                  "ServerApplicationIdentity" = "MI_SERVER"  
-                  "ServerAddress" = "TI-PACS-QA.t.titanium.solutions"  
-                  "ServerPort" = "104"  
-                  "RenderExternalAddress" = "https://ws120-QA-LMU.t.titanium.solutions/TitaniumRender"  
-              }
-
-              # Update the values
-              foreach ($key in $updates.Keys) {
-                  $node = $config.configuration.appSettings.add | Where-Object { $_.key -eq $key }
-                  if ($node) {
-                      $node.value = $updates[$key]
-                      Write-Host "Updated $key to $($updates[$key])"
-                  } else {
-                      # Add if not exists
-                      $newNode = $config.CreateElement("add")
-                      $newNode.SetAttribute("key", $key)
-                      $newNode.SetAttribute("value", $updates[$key])
-                      $config.configuration.appSettings.AppendChild($newNode) | Out-Null
-                      Write-Host "Added $key with value $($updates[$key])"
-                  }
-              }
-
-              # Save changes back
-              $config.Save($webConfigPath)
-
-              Write-Host "web.config updated successfully!"
-            displayName: "Update Config Key"
               
           # Configure IIS Application
           - powershell: |
@@ -307,6 +266,32 @@ stages:
       
             displayName: 'OptimiseIIS'
             continueOnError: true
+  - stage: DatabaseMigration
+    displayName: "Database Migration Stage"
+    dependsOn: 
+      - InstallApplication
+    condition: succeeded() 
+    jobs:
+      - job: MigrateDatabaseJob
+        pool:
+          name: Dublin
+          demands: 'agent.name -equals $(agentName)'
+
+        steps:
+
+          # Run the database migration
+          - task: PowerShell@2
+            displayName: "Run Data Migration"
+            inputs:
+              filePath: "$(Build.SourcesDirectory)/Run-DatabaseMigration.ps1"
+              arguments: >
+                -exePath "C:\Program Files\Titanium Solutions\Dental Web Services\bin\Titanium.Migration.DataAccess.Migration.exe" 
+                -server "$(Server)" 
+                -database "$(databaseName)" 
+                -user "$(databaseUserName)" 
+                -password "$(databasePassword)" 
+                -logFile "C:\Build\DataMigrationLog.txt"
+              failOnStderr: true
 
 
               
