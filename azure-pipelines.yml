@@ -14,7 +14,7 @@ variables:
   - name: databasePassword
     value: '$(dbPassword)'
   - name: BackupDirectory
-    value: ''
+    value: '\\sql2.tth.ds\test-backups'
 
 resources:
   pipelines:
