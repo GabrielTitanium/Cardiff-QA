@@ -1,0 +1,79 @@
+trigger: none  
+pr: none
+
+variables:
+  - group: Azure Connection
+  - name: agentName
+    value: 'Cardiff-QA'
+  - name: ServerInstance
+    value: 'tcp:salud-sql.database.windows.net,1433'
+
+resources:
+  pipelines:
+    - pipeline: SaludServices104_116  # Alias for the referenced pipeline
+      project: Titanium                     # The project where the pipeline exists
+      source: "Salud Services 104.116"        # The actual pipeline name (quoted because it contains spaces)
+      #trigger:
+        #tags:
+        #- ReleaseReady                      # Only trigger if the run includes the 'ReleaseReady' tag
+
+stages:
+  - stage: BackupDatabase
+    displayName: 'Backup Database'
+    jobs:
+      - job: BackupJob
+        displayName: 'Backup Job'
+        pool:
+          name: Dublin
+          demands: 'agent.name -equals $(agentName)'
+        steps:
+        - task: PowerShell@2
+          name: BackupDatabaseTask
+          displayName: 'Backup Database'
+          inputs:
+            targetType: inline
+            script: |
+              #— grab all required parameters from pipeline variables
+              $si   = "$(ServerInstance)"
+              $db   = "$(databaseName)"
+              $dir  = "$(BackupDirectory)"
+              $user = "$(databaseUserName)"
+              $pass = "$(databasePassword)"
+
+                      #— verify that the backup folder exists
+                      if (-not (Test-Path $dir)) {
+                        Write-Host "Backup directory '$dir' does not exist. Creating it..."
+                        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+                      }
+
+                      # if no filename was supplied, generate one as "<Database>_pre-upgrade_<yyyy-MM-dd>.bak"
+                      $file = $env:BackupFileName
+                      if ([string]::IsNullOrEmpty($file)) {
+                        $file = "$($db)-pre-upgrade_$(Get-Date -Format yyyy-MM-dd).bak"
+                      }
+
+                      $path = Join-Path $dir $file
+
+                      #— if a file already exists with that name, delete it
+                      if (Test-Path $path) {
+                        Write-Host "Overwriting existing backup: $path"
+                        Remove-Item $path -Force
+                      }
+
+                      #— build the T-SQL BACKUP command and connection string (with TrustServerCertificate=True)
+                      $qry = "BACKUP DATABASE [$db] TO DISK = N'$path' WITH NOFORMAT, INIT, NAME = N'$db-Full Database Backup', SKIP, STATS = 10;"
+                      $cs  = "Server=$si;Database=$db;User ID=$user;Password=$pass;TrustServerCertificate=True;"
+
+                      Write-Host "Starting backup of '$db' to '$path'..."
+                      try {
+                          Invoke-Sqlcmd -ConnectionString $cs -Query $qry
+                          Write-Host "✔ Backup completed successfully."
+                          Write-Host "Backup file: $path"
+                          #— export the final path as a pipeline (output) variable
+                          Write-Host "##vso[task.setvariable variable=BackupFilePath;isOutput=true]$path"
+                      }
+                      catch {
+                          Write-Error "Backup failed: $($_.Exception.Message)"
+                          exit 1
+                      }
+          
